@@ -92,6 +92,16 @@ struct thread {
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 
+	// ********************************************** //
+	// [MOD; SLEEP-WAIT IMPL]
+	int64_t awake_ticks;
+	// [MOD; DONATION PRIORITY IMPL]
+	int original_priority;
+	struct lock *wait_lock;
+	struct list donation_list;
+	struct list_elem donation_elem;
+	// ********************************************** //
+
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
@@ -132,6 +142,22 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
+
+// ********************************************** //
+// MOD FUNCTION DECLARATION
+// [MOD; SLEEP-WAIT IMPL]
+void thread_sleep(int64_t sleep_ticks);
+void thread_awake(int64_t global_ticks);
+// [MOD; READY_LIST PRIORITY IMPL]
+bool thread_insert_priority_helper(const struct list_elem *elem_1, const struct list_elem *elem_2, void *aux);
+// [MOD; PREEMPTION PRIORITY IMPL]
+void thread_preemption_priority(void);
+// [MOD; DONATE PRIORITY IMPL]
+void thread_insert_donation_priority(struct thread *curr_thread, int depth);
+void thread_update_donation_priority(void);
+void thread_remove_donor_from_donation_list(struct lock *curr_lock, struct list *curr_donation_list);
+bool thread_donation_priority_helper(const struct list_elem *curr_elem, const struct list_elem *cmp_elem, void *aux UNUSED);
+// ********************************************** //
 
 int thread_get_priority (void);
 void thread_set_priority (int);

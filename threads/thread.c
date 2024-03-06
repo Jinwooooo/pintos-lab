@@ -54,6 +54,15 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
+// ********************************************** //
+// GLOBAL VARIABLE DECLARATION
+// [MOD; SLEEP-WAIT IMPL]
+// DESCRIPTION when thread is BLOCKED, send it to sleep_list until
+// the set time to wake up
+static struct list sleep_list;
+// ********************************************** //
+
+
 static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
@@ -105,16 +114,22 @@ thread_init (void) {
 	};
 	lgdt (&gdt_ds);
 
-	/* Init the globla thread context */
-	lock_init (&tid_lock);
-	list_init (&ready_list);
-	list_init (&destruction_req);
+	/* Init the global thread context */
+	lock_init (&tid_lock);				// [COMMENT] used to synch and manipulate
+	list_init (&ready_list);			// [COMMENT] ready to run list (waiting list before cpu insertion)
+	list_init (&destruction_req);		// [COMMENT] threads that have to be deleted
+
+	// ********************************************** //
+	// [MOD; SLEEP-WAIT IMPL]
+	// DESCRIPTION intializing sleep list
+	list_init(&sleep_list);
+	// ********************************************** //
 
 	/* Set up a thread structure for the running thread. */
-	initial_thread = running_thread ();
-	init_thread (initial_thread, "main", PRI_DEFAULT);
-	initial_thread->status = THREAD_RUNNING;
-	initial_thread->tid = allocate_tid ();
+	initial_thread = running_thread ();							// [COMMENT] get main thread ptr
+	init_thread (initial_thread, "main", PRI_DEFAULT);			// [COMMENT] sets the main thread name and set prio = 32
+	initial_thread->status = THREAD_RUNNING;					
+	initial_thread->tid = allocate_tid ();						// [COMMENT] gets and sets unique tid
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -177,8 +192,7 @@ thread_print_stats (void) {
    PRIORITY, but no actual priority scheduling is implemented.
    Priority scheduling is the goal of Problem 1-3. */
 tid_t
-thread_create (const char *name, int priority,
-		thread_func *function, void *aux) {
+thread_create (const char *name, int priority, thread_func *function, void *aux) {
 	struct thread *t;
 	tid_t tid;
 
@@ -206,6 +220,12 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
+	// ********************************************** //
+	// [MOD; PREEMPTION PRIORITY IMPL]
+	// DESCRIPTION compare the priorities of the currently running thread and newly created
+	// yield the CPU if the newly arrived thread have higher priority
+	thread_preemption_priority();
+	// ********************************************** //
 
 	return tid;
 }
@@ -234,16 +254,52 @@ thread_block (void) {
    update other data. */
 void
 thread_unblock (struct thread *t) {
-	enum intr_level old_level;
+	enum intr_level old_level = intr_disable ();
 
 	ASSERT (is_thread (t));
-
-	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
-	t->status = THREAD_READY;
+
+	// ********************************************** //
+	// [ MOD; READY_LIST PRIORITY IMPL]
+	// DESCRIPTION keeping the ready_list in DESC order
+	list_insert_ordered(&ready_list, &t->elem, thread_insert_priority_helper, NULL);
+	// ********************************************** //
+
+	// [LEGACY] non priority
+	// list_push_back (&ready_list, &t->elem);
+
+	t->status = THREAD_READY; 
 	intr_set_level (old_level);
 }
+
+
+// ********************************************** //
+// [MOD; READY_LIST PRIORITY IMPL]
+// DESCRIPTION checks the priority of two thread (based on elem) and traverses the list
+// until the value of the priority is less than the next element (the point of insertion)
+// @ void *aux is entirely there for syntax (see list_insert_orderded code for clarification)
+bool 
+thread_insert_priority_helper(const struct list_elem *curr_elem, const struct list_elem *cmp_elem, void *aux UNUSED) {
+	struct thread *curr_thread = list_entry(curr_elem, struct thread, elem);
+	struct thread *cmp_thread = list_entry(cmp_elem, struct thread, elem);
+
+	return curr_thread->priority > cmp_thread->priority;
+}
+// ********************************************** //
+
+// ********************************************** //
+// [MOD; DONATION PRIORITY IMPL]
+// DESCRIPTION checks the priority of two threads (based on donation_elem) and traverses the list
+// until the value of the priority is less than the next element (the point of insertion)
+// @ void *aux is entirely there for syntax (see list_insert_orderded code for clarification)
+bool 
+thread_donation_priority_helper(const struct list_elem *curr_elem, const struct list_elem *cmp_elem, void *aux UNUSED) {
+	struct thread *curr_thread = list_entry(curr_elem, struct thread, donation_elem);
+	struct thread *cmp_thread = list_entry(cmp_elem, struct thread, donation_elem);
+
+	return curr_thread->priority > cmp_thread->priority;
+}
+// ********************************************** //
 
 /* Returns the name of the running thread. */
 const char *
@@ -296,22 +352,161 @@ thread_exit (void) {
    may be scheduled again immediately at the scheduler's whim. */
 void
 thread_yield (void) {
-	struct thread *curr = thread_current ();
-	enum intr_level old_level;
+	enum intr_level old_level = intr_disable();
 
-	ASSERT (!intr_context ());
+	struct thread *curr = thread_current();
 
-	old_level = intr_disable ();
-	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
-	do_schedule (THREAD_READY);
+	// ********************************************** //
+	// [MOD; PREEMPTION PRIORITY IMPL]
+	// DESCRIPTION put the current thread into the ready list (in priority order)
+	// and pull the current running thread out as ready
+	list_insert_ordered(&ready_list, &curr->elem, thread_insert_priority_helper, NULL);
+	do_schedule(THREAD_READY);
+	// ********************************************** //
+
+	// [LEGACY] BUSY-WAIT POLICY
+	// if (curr != idle_thread)
+	// 	list_push_back (&ready_list, &curr->elem);
+	// do_schedule(THREAD_READY);
+
 	intr_set_level (old_level);
 }
+
+// ********************************************** //
+// [MOD; PREEMPTION PRIORITY IMPL]
+// DESCRIPTION when the current running thread has less priority than the
+// first ready_list thread, then it will yield (give up the cpu)
+void
+thread_preemption_priority(void) {
+	enum intr_level old_level = intr_disable();
+
+	// if no thread is running and ready_list is empty (see function idle for clarification)
+	if(thread_current() == idle_thread)
+		return;
+
+	struct thread *curr_thread = thread_current();
+	struct thread *first_ready_thread = list_entry(list_begin(&ready_list), struct thread, elem);
+	
+	if(first_ready_thread->priority > curr_thread->priority)
+		thread_yield();
+	
+	intr_set_level(old_level);
+}
+// ********************************************** //
+
+// ********************************************** //
+// [MOD; SLEEP-WAIT IMPL]
+// DESCRIPTION change the state of caller thread to BLOCKED (insert to sleep_list),
+// store the tick when it needs to be woken up
+void
+thread_sleep(int64_t sleep_ticks) {
+	enum intr_level old_level = intr_disable();
+
+	struct thread *curr_thread = thread_current();
+
+	curr_thread->awake_ticks = sleep_ticks;
+	list_push_back(&sleep_list, &curr_thread->elem);
+	thread_block();
+	
+	intr_set_level(old_level);
+}
+// ********************************************** //
+
+// ********************************************** //
+// [MOD; SLEEP-WAIT IMPL]
+// DESCRIPTION if there is a thread that can be woken up according to global tick
+void
+thread_awake(int64_t global_ticks) {
+	enum intr_level old_level = intr_disable();
+
+	struct list_elem *curr_elem = list_begin(&sleep_list);
+	struct thread *curr_thread;
+
+	// time complexity : O(n)
+	while(curr_elem != list_end(&sleep_list)) {
+		curr_thread = list_entry(curr_elem, struct thread, elem);
+
+		if(global_ticks >= curr_thread->awake_ticks) {
+			curr_elem = list_remove(curr_elem);
+			thread_unblock(curr_thread);
+		} else
+			curr_elem = list_next(curr_elem);
+	}
+
+	intr_set_level(old_level);
+}
+// ********************************************** //
+
+// ********************************************** //
+// [MOD; DONATE PRIORITY IMPL]
+// DESCRIPTION recurse through the priority and if priority is higher in donation list
+// update the priority to the highest priority
+void 
+thread_insert_donation_priority(struct thread *curr_thread, int depth) {
+    if (depth == 0 || curr_thread->wait_lock == NULL)
+        return;
+    
+    struct thread *lock_holding_thread = curr_thread->wait_lock->holder;
+
+	if(lock_holding_thread->priority < curr_thread->priority)
+    	lock_holding_thread->priority = curr_thread->priority;
+    thread_insert_donation_priority(lock_holding_thread, depth - 1);
+}
+// ********************************************** //
+
+// ********************************************** //
+// [MOD; DONATE PRIORITY IMPL]
+// DESCRIPTION updating the priority based on the current donation list
+void 
+thread_update_donation_priority(void) {
+	struct thread *curr_thread = thread_current();
+	struct list *curr_donation_list = &(curr_thread->donation_list);
+
+	if(list_empty(curr_donation_list) || curr_thread->original_priority > list_entry(list_front(curr_donation_list), struct thread, donation_elem)->priority)
+		curr_thread->priority = curr_thread->original_priority;
+	else
+		curr_thread->priority = list_entry(list_front(curr_donation_list), struct thread, donation_elem)->priority;
+}
+// ********************************************** //
+
+// ********************************************** //
+// [MOD; DONATE PRIORITY IMPL]
+// DESCRIPTION remove donor from donation list by traversing through
+// the entire donation list
+void
+thread_remove_donor_from_donation_list(struct lock *curr_lock, struct list *curr_donation_list) {
+	struct thread *donor_thread;
+	struct list_elem *donor_elem = list_front(curr_donation_list);
+
+	// time complexity = O(n)
+	while(donor_elem != list_end(curr_donation_list)) {
+		donor_thread = list_entry(donor_elem, struct thread, donation_elem);
+
+		if(donor_thread->wait_lock == curr_lock)
+			donor_elem = list_remove(&donor_thread->donation_elem);
+		else
+			donor_elem = list_next(donor_elem);
+	}
+}
+// ********************************************** //
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority;
+	// ********************************************** //
+	// [MOD; DONATION PRIORITY IMPL]
+	// DESCRIPTION updating accordingly when priority is modified at some random point
+	// when priority is modified at some random point, the original priority must be
+	// modified to update donation priority accordingly
+	thread_current ()->original_priority = new_priority;
+	thread_update_donation_priority();
+	// ********************************************** //
+
+	// ********************************************** //
+	// [MOD; PREEMPTION PRIORITY IMPL]
+	// DESCRIPTION updating accordingly when priority is modified at some random point
+	thread_preemption_priority();
+	// ********************************************** //
 }
 
 /* Returns the current thread's priority. */
@@ -409,6 +604,15 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
 	t->magic = THREAD_MAGIC;
+
+	// ********************************************** //
+	// [MOD; DONATION PRIORITY IMPL]
+	// DESCRIPTION original priority holder in order to return 
+	// if all donators have been processed and initializing donation list
+	t->original_priority = priority;
+	t->wait_lock = NULL;
+	list_init(&(t->donation_list));
+	// ********************************************** //
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
