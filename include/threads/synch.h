@@ -45,7 +45,6 @@ void cond_signal (struct condition *, struct lock *);
 void cond_broadcast (struct condition *, struct lock *);
 
 // ********************************************** //
-// MOD FUNCTION DECLARATION
 // [MOD; SEMAPHORE PRIORITY IMPL]
 bool sema_insert_priority_helper(const struct list_elem *curr_elem, const struct list_elem *cmp_elem, void *aux);
 // ********************************************** //

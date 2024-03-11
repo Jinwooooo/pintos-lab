@@ -137,14 +137,30 @@ timer_interrupt (struct intr_frame *args UNUSED) {
 	thread_tick ();
 
 	// ********************************************** //
+	// [MOD; MLFQS IMPL]
+	// DESCRIPTION every tick, 4 ticks, 1 seconds mlfqs must
+	// update values accordingly (see gitbook for clarification)
+	if(thread_mlfqs) {
+		if(ticks % TIMER_FREQ == 0) {
+			thread_mlfqs_calculate_load_avg();
+			thread_mlfqs_calculate_recent_cpu();
+		}
+
+		if(ticks % 4 == 0)
+			thread_mlfqs_calculate_priority();
+		
+		thread_mlfqs_increment_recent_cpu();
+	} else {
+		// [MOD; PREEMPTION PRIORITY IMPL]
+		// DESCRIPTION check the current running thread priority and ready list
+		// thread priority and swap if necessary
+		thread_preemption_priority();
+		// ********************************************** //
+	}
 	// [MOD; SLEEP-WAIT IMPL]
 	// DESCRIPTION call thread_awake every interrupt to check any thread
 	// that needs to be woken
 	thread_awake(ticks);
-	// [MOD; PREEMPTION PRIORITY IMPL]
-	// DESCRIPTION check the current running thread priority and ready list
-	// thread priority and swap if necessary
-	thread_preemption_priority();
 	// ********************************************** //
 }
 
