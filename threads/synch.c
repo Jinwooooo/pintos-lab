@@ -280,22 +280,6 @@ lock_release (struct lock *lock) {
 	sema_up (&lock->semaphore);
 }
 
-// [MOD; PRIORITY DONATION IMPL]
-// DEBUGGING PURPOSES
-// void
-// print_donation_list(struct thread *curr_thread) {
-// 	struct list *donation_list = &curr_thread->donation_list;
-// 	if(!list_empty(donation_list)) {
-// 		struct list_elem *curr_elem = list_begin(donation_list);
-// 		while(curr_elem != list_end(donation_list)) {
-// 			struct thread *donor_thread = list_entry(curr_elem, struct thread, elem);
-// 			msg("donor_thread id = %d ; donor_thread o_prio = %d", donor_thread->tid, donor_thread->original_priority);
-// 			curr_elem = list_next(curr_elem);
-// 		}
-// 	}
-// 	msg("------end donation list print----------");
-// }
-
 /* Returns true if the current thread holds LOCK, false
    otherwise.  (Note that testing whether some other thread holds
    a lock would be racy.) */
